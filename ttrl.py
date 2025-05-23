@@ -23,7 +23,7 @@ from code_executor import CodeExecutor
 from loader import ARCExample
 from llm_call import LLMInterface
 
-MODEL_NAME = "Qwen/Qwen2.5-Coder-1.5B"
+MODEL_NAME = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
 #MODEL_NAME = "HuggingFaceTB/SmolLM2-135M-Instruct"
 
 class TestRL:

@@ -23,7 +23,8 @@ from code_executor import CodeExecutor
 from loader import ARCExample
 from llm_call import LLMInterface
 
-MODEL_NAME = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
+MODEL_NAME = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
+#MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 #MODEL_NAME = "HuggingFaceTB/SmolLM2-135M-Instruct"
 
 class TestRL:
@@ -233,10 +234,10 @@ class TestRL:
             num_generations=2,
             bf16=False,
             use_vllm=False,
-            max_steps=10,  # Fewer steps for faster iteration
+            max_steps=1000,  # Fewer steps for faster iteration
             max_completion_length=self.max_seq_length,
             optim="paged_adamw_8bit",
-            logging_steps=5,
+            logging_steps=50,
             save_steps=100,
         )
         

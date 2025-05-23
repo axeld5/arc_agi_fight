@@ -15,7 +15,7 @@ import random
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import Dataset
 from peft import LoraConfig, get_peft_model
 from trl import GRPOConfig, GRPOTrainer
@@ -27,9 +27,9 @@ from llm_call import LLMInterface
 class TestRL:
     """Main Test Reinforcement Learning class"""
     
-    def __init__(self, arc_data_path: str = "ARC-AGI/data/training", model_name: str = "Qwen/Qwen2.5-3B-Instruct"):
+    def __init__(self, arc_data_path: str = "ARC-AGI/data/training", model_name: str = "HuggingFaceTB/SmolLM2-135M-Instruct"):
         self.arc_data_path = Path(arc_data_path)
-        self.llm = LLMInterface()
+        self.llm = LLMInterface(model_name=model_name)
         self.code_executor = CodeExecutor()
         self.model_name = model_name
         self.max_seq_length = 512
@@ -47,17 +47,9 @@ class TestRL:
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-        
-        # Apply LoRA configuration
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_compute_dtype=torch.float32
-        )
-        
+    
         self.model = AutoModelForCausalLM.from_pretrained(
-            model_name, device_map="cuda:0", quantization_config=bnb_config
+            model_name, device_map="cuda:0"
         )
         
         config = LoraConfig(
@@ -97,7 +89,6 @@ class TestRL:
         # First check if code can be extracted
         if code is None:
             return -1.0, "Code could not be extracted from response"
-        
         extracted_code = self.code_executor.extract_code_from_response(code)
         if extracted_code is None:
             return -1.0, "No valid transform function found in code"
@@ -117,14 +108,14 @@ class TestRL:
         else:
             return -0.5, f"Code executed but output doesn't match. Expected: {held_out_output}, Got: {predicted_output}"
     
-    def grpo_reward_function(self, generated_outputs: List[str]) -> List[float]:
+    def grpo_reward_function(self, completions: List[str], **kwargs) -> List[float]:
         """
         Reward function compatible with GRPO trainer
         """
         rewards = []
-        for output in generated_outputs:
+        for completion in completions:
             reward, _ = self.calculate_reward(
-                output, 
+                completion[0]["content"], 
                 self.current_training_examples, 
                 self.current_held_out_example
             )
@@ -145,8 +136,17 @@ class TestRL:
         
         prompt_text += "Please provide a Python function that solves this pattern:"
         
-        # Create initial answer (we'll let GRPO improve this)
+        print("🤖 Generating initial code with LLM...")
         initial_answer = self.llm.generate_code(training_examples)
+        
+        # Debug: Check if initial_answer is None
+        if initial_answer is None:
+            print("⚠️ Warning: LLM returned None, using fallback answer")
+            initial_answer = '''def transform(input_grid: List[List[int]]) -> List[List[int]]:
+    # Simple fallback - return input unchanged
+    return input_grid'''
+        
+        print(f"✅ Got initial answer: {len(initial_answer)} characters")
         
         rows = [{
             "question": prompt_text,
@@ -226,7 +226,7 @@ class TestRL:
         
         # Setup GRPO training
         training_args = GRPOConfig(
-            per_device_train_batch_size=1,
+            per_device_train_batch_size=2,
             gradient_accumulation_steps=4,
             num_generations=2,
             bf16=False,

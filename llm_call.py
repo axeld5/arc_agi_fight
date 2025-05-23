@@ -5,6 +5,9 @@ from typing import List, Tuple
 class LLMInterface:
     """Interface for interacting with LLM to generate code"""
     
+    def __init__(self, model_name: str = "Qwen/Qwen2.5-Coder-1.5B"):
+        self.model_name = model_name
+    
     def generate_code(self, train_examples: List[Tuple[List[List[int]], List[List[int]]]]) -> str:
         """
         Generate code based on training examples
@@ -38,7 +41,7 @@ Training examples:
         
         return prompt
     
-    def _get_llm_response(self, prompt: str) -> str:
+    def _get_llm_response(self, prompt: str, ) -> str:
         """
         Get response from LLM
         This is a placeholder - replace with actual LLM API call
@@ -46,14 +49,13 @@ Training examples:
         try:
             from transformers import AutoTokenizer, AutoModelForCausalLM
             import torch
-            
-            print(f"🤖 Loading Qwen-2.5-Coder-1.5B from HuggingFace...")
+
+            print(f"🤖 Loading {self.model_name} from HuggingFace...")
             
             # Load the model and tokenizer
-            model_name = "Qwen/Qwen2.5-Coder-1.5B"
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             model = AutoModelForCausalLM.from_pretrained(
-                model_name,
+                self.model_name,
                 torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
                 device_map="auto" if torch.cuda.is_available() else None
             )
@@ -79,11 +81,11 @@ Training examples:
             # Remove the original prompt from the response
             llm_response = response_text[len(prompt):].strip()
             
-            print(f"✅ Got response from Qwen-2.5-Coder-1.5B")
+            print(f"✅ Got response from {self.model_name}")
             return llm_response
                 
         except Exception as e:
-            print(f"⚠️ Failed to call Qwen-2.5-Coder-1.5B: {e}")
+            print(f"⚠️ Failed to call {self.model_name}: {e}")
             print("📝 Falling back to demo response...")
             
             # Fallback demo response

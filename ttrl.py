@@ -23,11 +23,13 @@ from code_executor import CodeExecutor
 from loader import ARCExample
 from llm_call import LLMInterface
 
+MODEL_NAME = "Qwen/Qwen2.5-Coder-1.5B"
+#MODEL_NAME = "HuggingFaceTB/SmolLM2-135M-Instruct"
 
 class TestRL:
     """Main Test Reinforcement Learning class"""
     
-    def __init__(self, arc_data_path: str = "ARC-AGI/data/training", model_name: str = "HuggingFaceTB/SmolLM2-135M-Instruct"):
+    def __init__(self, arc_data_path: str = "ARC-AGI/data/training", model_name: str = MODEL_NAME):
         self.arc_data_path = Path(arc_data_path)
         self.llm = LLMInterface(model_name=model_name)
         self.code_executor = CodeExecutor()
@@ -231,7 +233,7 @@ class TestRL:
             num_generations=2,
             bf16=False,
             use_vllm=False,
-            max_steps=20,  # Fewer steps for faster iteration
+            max_steps=10,  # Fewer steps for faster iteration
             max_completion_length=self.max_seq_length,
             optim="paged_adamw_8bit",
             logging_steps=5,
@@ -255,25 +257,34 @@ class TestRL:
             prompt_text += f"Example {i+1}:\nInput: {input_grid}\nOutput: {output_grid}\n\n"
         prompt_text += "Python function:"
         
-        # Use the trained model to generate final code
+        # Use the trained model to generate multiple candidate codes and pick the one with highest reward
+        num_generations = 8
         inputs = self.tokenizer(prompt_text, return_tensors="pt", truncation=True, max_length=self.max_seq_length)
-        
+        inputs = inputs.to("cuda:0")
+        candidate_codes = []
+        rewards_and_explanations = []
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
                 max_new_tokens=1000,
                 temperature=0.7,
                 do_sample=True,
-                pad_token_id=self.tokenizer.pad_token_id
+                pad_token_id=self.tokenizer.pad_token_id,
+                num_return_sequences=num_generations
             )
+        for i in range(num_generations):
+            code = self.tokenizer.decode(outputs[i], skip_special_tokens=True)
+            reward, explanation = self.calculate_reward(
+                code, training_examples, held_out_example
+            )
+            candidate_codes.append(code)
+            rewards_and_explanations.append((reward, explanation))
+        # Pick the code with the highest reward
+        best_idx = max(range(num_generations), key=lambda i: rewards_and_explanations[i][0])
+        best_code = candidate_codes[best_idx]
+        final_reward, explanation = rewards_and_explanations[best_idx]
         
-        best_code = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
-        # Test final reward
-        final_reward, explanation = self.calculate_reward(
-            best_code, training_examples, held_out_example
-        )
-        
+        print(f"Final code:\n{best_code}")
         print(f"🎖️  Final Reward: {final_reward} - {explanation}")
         
         if final_reward < 1.0:

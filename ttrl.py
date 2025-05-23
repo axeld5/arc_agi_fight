@@ -5,7 +5,7 @@ Test Reinforcement Learning (TTRL) for ARC AGI
 This implements a reinforcement learning approach where:
 1. Load an ARC AGI example
 2. Use all training samples minus 1 for training
-3. RL training loop until reward reaches 1
+3. RL training loop using GRPO until reward reaches 1
 4. Test on all training samples, then apply to test sample
 """
 
@@ -14,6 +14,11 @@ import os
 import random
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from datasets import Dataset
+from peft import LoraConfig, get_peft_model
+from trl import GRPOConfig, GRPOTrainer
 from code_executor import CodeExecutor
 from loader import ARCExample
 from llm_call import LLMInterface
@@ -22,10 +27,52 @@ from llm_call import LLMInterface
 class TestRL:
     """Main Test Reinforcement Learning class"""
     
-    def __init__(self, arc_data_path: str = "ARC-AGI/data/training"):
+    def __init__(self, arc_data_path: str = "ARC-AGI/data/training", model_name: str = "Qwen/Qwen2.5-3B-Instruct"):
         self.arc_data_path = Path(arc_data_path)
         self.llm = LLMInterface()
         self.code_executor = CodeExecutor()
+        self.model_name = model_name
+        self.max_seq_length = 512
+        
+        # Initialize model and tokenizer for GRPO training
+        print(f"🤖 Loading model: {model_name}")
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype="auto",
+            device_map="auto"
+        )
+        self.model.gradient_checkpointing_enable()
+        self.model.enable_input_require_grads()
+        
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+        
+        # Apply LoRA configuration
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=torch.float32
+        )
+        
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name, device_map="cuda:0", quantization_config=bnb_config
+        )
+        
+        config = LoraConfig(
+            r=8,                   
+            lora_alpha=16,
+            bias="none",           
+            lora_dropout=0.05,
+            task_type="CAUSAL_LM",
+            target_modules=['o_proj', 'qkv_proj', 'gate_up_proj', 'down_proj'],
+        )
+        self.model = get_peft_model(self.model, config)
+        
+        # Store current training context for reward function
+        self.current_training_examples = None
+        self.current_held_out_example = None
         
     def load_random_example(self) -> ARCExample:
         """Load a random ARC AGI example"""
@@ -70,6 +117,45 @@ class TestRL:
         else:
             return -0.5, f"Code executed but output doesn't match. Expected: {held_out_output}, Got: {predicted_output}"
     
+    def grpo_reward_function(self, generated_outputs: List[str]) -> List[float]:
+        """
+        Reward function compatible with GRPO trainer
+        """
+        rewards = []
+        for output in generated_outputs:
+            reward, _ = self.calculate_reward(
+                output, 
+                self.current_training_examples, 
+                self.current_held_out_example
+            )
+            rewards.append(reward)
+        return rewards
+    
+    def create_training_dataset(self, training_examples: List[Tuple[List[List[int]], List[List[int]]]]) -> Dataset:
+        """
+        Create a dataset for GRPO training from ARC examples
+        """
+        # Create prompt from training examples
+        prompt_text = "Given the following input-output examples, write a Python function called 'transform' that converts the input to the output:\n\n"
+        
+        for i, (input_grid, output_grid) in enumerate(training_examples):
+            prompt_text += f"Example {i+1}:\n"
+            prompt_text += f"Input: {input_grid}\n"
+            prompt_text += f"Output: {output_grid}\n\n"
+        
+        prompt_text += "Please provide a Python function that solves this pattern:"
+        
+        # Create initial answer (we'll let GRPO improve this)
+        initial_answer = self.llm.generate_code(training_examples)
+        
+        rows = [{
+            "question": prompt_text,
+            "answer": initial_answer,
+            "prompt": [{"role": "user", "content": prompt_text}]
+        }]
+        
+        return Dataset.from_list(rows)
+    
     def test_on_all_training_samples(self, code: str, all_train_examples: List[Tuple[List[List[int]], List[List[int]]]]) -> Tuple[bool, str]:
         """
         Test the code on all training samples
@@ -112,9 +198,9 @@ class TestRL:
     
     def run_single_rl_iteration(self, example: ARCExample) -> Dict[str, Any]:
         """
-        Run a single RL iteration:
+        Run a single RL iteration using GRPO:
         1. Hold out one training sample
-        2. Train on remaining samples until reward = 1
+        2. Train using GRPO with remaining samples
         3. Test on all training samples
         4. If successful, apply to test samples
         """
@@ -131,34 +217,69 @@ class TestRL:
         print(f"🎯 Held out training sample {held_out_idx + 1}/{len(train_examples)}")
         print(f"📚 Training on {len(training_examples)} samples")
         
-        # RL Training loop
-        max_iterations = 10  # Prevent infinite loops
-        iteration = 0
-        best_code = None
+        # Set current context for reward function
+        self.current_training_examples = training_examples
+        self.current_held_out_example = held_out_example
         
-        while iteration < max_iterations:
-            iteration += 1
-            print(f"\n🔄 RL Iteration {iteration}")
-            
-            # Generate code from LLM
-            generated_response = self.llm.generate_code(training_examples)
-            
-            # Calculate reward
-            reward, explanation = self.calculate_reward(
-                generated_response, training_examples, held_out_example
+        # Create training dataset
+        dataset = self.create_training_dataset(training_examples)
+        
+        # Setup GRPO training
+        training_args = GRPOConfig(
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=4,
+            num_generations=2,
+            bf16=False,
+            use_vllm=False,
+            max_steps=20,  # Fewer steps for faster iteration
+            max_completion_length=self.max_seq_length,
+            optim="paged_adamw_8bit",
+            logging_steps=5,
+            save_steps=100,
+        )
+        
+        trainer = GRPOTrainer(
+            self.model,
+            processing_class=self.tokenizer,
+            reward_funcs=[self.grpo_reward_function],
+            train_dataset=dataset,
+            args=training_args,
+        )
+        
+        print("🚀 Starting GRPO training...")
+        trainer.train()
+        
+        # Generate final code using trained model
+        prompt_text = f"Given the following input-output examples, write a Python function called 'transform':\n\n"
+        for i, (input_grid, output_grid) in enumerate(training_examples):
+            prompt_text += f"Example {i+1}:\nInput: {input_grid}\nOutput: {output_grid}\n\n"
+        prompt_text += "Python function:"
+        
+        # Use the trained model to generate final code
+        inputs = self.tokenizer(prompt_text, return_tensors="pt", truncation=True, max_length=self.max_seq_length)
+        
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=1000,
+                temperature=0.7,
+                do_sample=True,
+                pad_token_id=self.tokenizer.pad_token_id
             )
-            
-            print(f"🎖️  Reward: {reward} - {explanation}")
-            
-            if reward == 1.0:
-                print("🎉 Achieved reward = 1! Stopping RL training.")
-                best_code = generated_response
-                break
         
-        if best_code is None:
+        best_code = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        # Test final reward
+        final_reward, explanation = self.calculate_reward(
+            best_code, training_examples, held_out_example
+        )
+        
+        print(f"🎖️  Final Reward: {final_reward} - {explanation}")
+        
+        if final_reward < 1.0:
             return {
-                "success": False, 
-                "reason": f"Failed to achieve reward = 1 after {max_iterations} iterations",
+                "success": False,
+                "reason": f"GRPO training completed but final reward = {final_reward}",
                 "held_out_idx": held_out_idx
             }
         
@@ -196,7 +317,7 @@ class TestRL:
         return {
             "success": True,
             "held_out_idx": held_out_idx,
-            "training_iterations": iteration,
+            "training_method": "GRPO",
             "final_code": best_code,
             "test_results": test_results
         }
@@ -206,7 +327,7 @@ class TestRL:
         Run the full TTRL experiment:
         - Try different held-out samples until success or max_attempts reached
         """
-        print("🚀 Starting Test Reinforcement Learning Experiment")
+        print("🚀 Starting Test Reinforcement Learning Experiment with GRPO")
         print("=" * 60)
         
         # Load a random example
@@ -239,7 +360,7 @@ class TestRL:
 
 def main():
     """Main function to run the TTRL experiment"""
-    print("🧠 Test Reinforcement Learning for ARC AGI")
+    print("🧠 Test Reinforcement Learning for ARC AGI with GRPO")
     print("=" * 50)
     
     # Initialize TTRL
@@ -256,7 +377,7 @@ def main():
         print("✅ SUCCESS!")
         print(f"🎯 Solved in {result['attempts_needed']} attempt(s)")
         final_result = result["final_result"]
-        print(f"🔄 Required {final_result['training_iterations']} RL iterations")
+        print(f"🤖 Training method: {final_result.get('training_method', 'GRPO')}")
         print(f"📝 Held out training sample {final_result['held_out_idx'] + 1}")
         
         # Show test results

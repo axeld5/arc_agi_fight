@@ -17,7 +17,6 @@ from typing import List, Dict, Any, Tuple, Optional
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import Dataset
-from peft import LoraConfig, get_peft_model
 from trl import GRPOConfig, GRPOTrainer
 from code_executor import CodeExecutor
 from loader import ARCExample
@@ -54,16 +53,6 @@ class TestRL:
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name, device_map="cuda:0"
         )
-        
-        config = LoraConfig(
-            r=8,                   
-            lora_alpha=16,
-            bias="none",           
-            lora_dropout=0.05,
-            task_type="CAUSAL_LM",
-            target_modules=['o_proj', 'qkv_proj', 'gate_up_proj', 'down_proj'],
-        )
-        self.model = get_peft_model(self.model, config)
         
         # Store current training context for reward function
         self.current_training_examples = None

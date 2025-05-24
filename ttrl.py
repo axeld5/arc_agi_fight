@@ -18,23 +18,26 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import Dataset
 from trl import GRPOConfig, GRPOTrainer
+from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 from code_executor import CodeExecutor
 from loader import ARCExample
 from llm_call import LLMInterface
 
-MODEL_NAME = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
+#MODEL_NAME = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
 #MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 #MODEL_NAME = "HuggingFaceTB/SmolLM2-135M-Instruct"
+MODEL_NAME = "Qwen/Qwen3-1.7B"
 
 class TestRL:
     """Main Test Reinforcement Learning class"""
     
-    def __init__(self, arc_data_path: str = "ARC-AGI/data/training", model_name: str = MODEL_NAME):
+    def __init__(self, arc_data_path: str = "ARC-AGI/data/training", model_name: str = MODEL_NAME, use_lora: bool = True):
         self.arc_data_path = Path(arc_data_path)
         self.llm = LLMInterface(model_name=model_name)
         self.code_executor = CodeExecutor()
         self.model_name = model_name
         self.max_seq_length = 512
+        self.use_lora = use_lora
         
         # Initialize model and tokenizer for GRPO training
         print(f"🤖 Loading model: {model_name}")
@@ -43,16 +46,40 @@ class TestRL:
             torch_dtype="auto",
             device_map="auto"
         )
-        self.model.gradient_checkpointing_enable()
-        self.model.enable_input_require_grads()
         
+        # Initialize tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-    
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name, device_map="cuda:0"
-        )
+            # Resize model embeddings to account for new tokens
+            self.model.resize_token_embeddings(len(self.tokenizer))
+        
+        # Apply LoRA if enabled
+        if self.use_lora:
+            print("🔧 Applying LoRA configuration...")
+            lora_config = LoraConfig(
+                task_type=TaskType.CAUSAL_LM,
+                inference_mode=False,
+                r=16,  # Rank of adaptation
+                lora_alpha=32,  # LoRA scaling parameter
+                lora_dropout=0.1,  # LoRA dropout
+                # Target modules - adjust based on your model architecture
+                target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+                # For some models you might need different target modules:
+                # target_modules=["query", "value", "key", "dense"]  # For BERT-like models
+                # target_modules=["c_attn", "c_proj", "c_fc"]  # For GPT-like models
+            )
+            
+            self.model = get_peft_model(self.model, lora_config)
+            print(f"✅ LoRA applied. Trainable parameters: {self.model.print_trainable_parameters()}")
+        else:
+            # Enable gradient checkpointing and input gradients for full fine-tuning
+            self.model.gradient_checkpointing_enable()
+            self.model.enable_input_require_grads()
+        
+        # Move model to device
+        if not hasattr(self.model, 'hf_device_map'):
+            self.model = self.model.to("cuda:0")
         
         # Store current training context for reward function
         self.current_training_examples = None
@@ -216,16 +243,17 @@ class TestRL:
         # Create training dataset
         dataset = self.create_training_dataset(training_examples)
         
-        # Setup GRPO training
+        # Setup GRPO training with LoRA-friendly settings
         training_args = GRPOConfig(
             per_device_train_batch_size=2,
             gradient_accumulation_steps=4,
             num_generations=2,
             bf16=False,
             use_vllm=False,
-            max_steps=50,  # Fewer steps for faster iteration
+            max_steps=50 if not self.use_lora else 100,  # Fewer steps for LoRA as it trains faster
             max_completion_length=self.max_seq_length,
             optim="adamw_torch",
+            learning_rate=5e-4 if not self.use_lora else 1e-4,  # Lower learning rate for LoRA
             logging_steps=10,
             save_steps=50,
         )
@@ -238,7 +266,7 @@ class TestRL:
             args=training_args,
         )
         
-        print("🚀 Starting GRPO training...")
+        print(f"🚀 Starting GRPO training with {'LoRA' if self.use_lora else 'full fine-tuning'}...")
         trainer.train()
         
         # Generate final code using trained model
@@ -250,7 +278,11 @@ class TestRL:
         # Use the trained model to generate multiple candidate codes and pick the one with highest reward
         num_generations = 8
         inputs = self.tokenizer(prompt_text, return_tensors="pt", truncation=True, max_length=self.max_seq_length)
-        inputs = inputs.to("cuda:0")
+        
+        # Handle device placement for LoRA models
+        device = next(self.model.parameters()).device
+        inputs = inputs.to(device)
+        
         candidate_codes = []
         rewards_and_explanations = []
         with torch.no_grad():
@@ -318,7 +350,7 @@ class TestRL:
         return {
             "success": True,
             "held_out_idx": held_out_idx,
-            "training_method": "GRPO",
+            "training_method": f"GRPO with {'LoRA' if self.use_lora else 'full fine-tuning'}",
             "final_code": best_code,
             "test_results": test_results
         }
@@ -361,11 +393,11 @@ class TestRL:
 
 def main():
     """Main function to run the TTRL experiment"""
-    print("🧠 Test Reinforcement Learning for ARC AGI with GRPO")
+    print("🧠 Test Reinforcement Learning for ARC AGI with GRPO + LoRA")
     print("=" * 50)
     
-    # Initialize TTRL
-    ttrl = TestRL()
+    # Initialize TTRL with LoRA enabled
+    ttrl = TestRL(use_lora=True)
     
     # Run the experiment
     result = ttrl.run_full_experiment(max_attempts=3)
@@ -378,7 +410,7 @@ def main():
         print("✅ SUCCESS!")
         print(f"🎯 Solved in {result['attempts_needed']} attempt(s)")
         final_result = result["final_result"]
-        print(f"🤖 Training method: {final_result.get('training_method', 'GRPO')}")
+        print(f"🤖 Training method: {final_result.get('training_method', 'GRPO with LoRA')}")
         print(f"📝 Held out training sample {final_result['held_out_idx'] + 1}")
         
         # Show test results

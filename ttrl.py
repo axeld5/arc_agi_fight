@@ -36,7 +36,7 @@ class TestRL:
         self.llm = LLMInterface(model_name=model_name)
         self.code_executor = CodeExecutor()
         self.model_name = model_name
-        self.max_seq_length = 256
+        self.max_seq_length = 32768
         self.use_lora = use_lora
         
         # Initialize model and tokenizer for GRPO training

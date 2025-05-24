@@ -43,7 +43,8 @@ class TestRL:
         print(f"🤖 Loading model: {model_name}")
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype="auto",
+            torch_dtype=torch.bfloat16,
+            attn_implementation="eager",
             device_map="auto"
         )
         
@@ -60,14 +61,11 @@ class TestRL:
             lora_config = LoraConfig(
                 task_type=TaskType.CAUSAL_LM,
                 inference_mode=False,
-                r=16,  # Rank of adaptation
+                r=8,  # Rank of adaptation
                 lora_alpha=32,  # LoRA scaling parameter
                 lora_dropout=0.1,  # LoRA dropout
                 # Target modules - adjust based on your model architecture
-                target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-                # For some models you might need different target modules:
-                # target_modules=["query", "value", "key", "dense"]  # For BERT-like models
-                # target_modules=["c_attn", "c_proj", "c_fc"]  # For GPT-like models
+                target_modules="all-linear",
             )
             
             self.model = get_peft_model(self.model, lora_config)
@@ -245,9 +243,9 @@ class TestRL:
         
         # Setup GRPO training with LoRA-friendly settings
         training_args = GRPOConfig(
-            per_device_train_batch_size=4,
+            per_device_train_batch_size=2,
             gradient_accumulation_steps=4,
-            num_generations=4,
+            num_generations=2,
             bf16=True,
             use_vllm=False,
             max_steps=50 if not self.use_lora else 100,  # Fewer steps for LoRA as it trains faster

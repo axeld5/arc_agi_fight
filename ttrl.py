@@ -151,8 +151,8 @@ class TestRL:
             prompt_text += f"Input: {input_grid}\n"
             prompt_text += f"Output: {output_grid}\n\n"
         
-        prompt_text += "Please provide a Python function that solves this pattern:"
-        
+        prompt_text += "Provide the function and only the function. Now, provide the Python function that solves this pattern:"
+        print(prompt_text)
         print("🤖 Generating initial code with LLM...")
         initial_answer = self.llm.generate_code(training_examples)
         

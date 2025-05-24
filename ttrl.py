@@ -26,7 +26,7 @@ from llm_call import LLMInterface
 #MODEL_NAME = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
 #MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 #MODEL_NAME = "HuggingFaceTB/SmolLM2-135M-Instruct"
-MODEL_NAME = "Qwen/Qwen3-1.7B"
+MODEL_NAME = "Qwen/Qwen3-4B"
 
 class TestRL:
     """Main Test Reinforcement Learning class"""
@@ -36,7 +36,7 @@ class TestRL:
         self.llm = LLMInterface(model_name=model_name)
         self.code_executor = CodeExecutor()
         self.model_name = model_name
-        self.max_seq_length = 512
+        self.max_seq_length = 256
         self.use_lora = use_lora
         
         # Initialize model and tokenizer for GRPO training
@@ -273,7 +273,7 @@ class TestRL:
         prompt_text = f"Given the following input-output examples, write a Python function called 'transform':\n\n"
         for i, (input_grid, output_grid) in enumerate(training_examples):
             prompt_text += f"Example {i+1}:\nInput: {input_grid}\nOutput: {output_grid}\n\n"
-        prompt_text += "Python function:"
+        prompt_text += "Output the code and only the code.Python function:"
         
         # Use the trained model to generate multiple candidate codes and pick the one with highest reward
         num_generations = 8

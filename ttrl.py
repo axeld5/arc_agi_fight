@@ -23,9 +23,9 @@ from code_executor import CodeExecutor
 from loader import ARCExample
 from llm_call import LLMInterface
 
-MODEL_NAME = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
+#MODEL_NAME = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
 #MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
-#MODEL_NAME = "HuggingFaceTB/SmolLM2-135M-Instruct"
+MODEL_NAME = "HuggingFaceTB/SmolLM2-135M-Instruct"
 #MODEL_NAME = "Qwen/Qwen3-1.7B"
 
 class TestRL:
@@ -249,12 +249,12 @@ class TestRL:
             num_generations=2,
             bf16=True,
             use_vllm=False,
-            max_steps=50 if not self.use_lora else 100,  # Fewer steps for LoRA as it trains faster
+            max_steps=50 if not self.use_lora else 1000,  # Fewer steps for LoRA as it trains faster
             max_completion_length=self.max_seq_length,
             optim="adamw_torch",
             learning_rate=5e-4 if not self.use_lora else 1e-4,  # Lower learning rate for LoRA
-            logging_steps=5,
-            save_steps=50,
+            logging_steps=20,
+            save_steps=200,
         )
         
         trainer = GRPOTrainer(
@@ -287,7 +287,7 @@ class TestRL:
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=1000,
+                max_new_tokens=1024,
                 temperature=0.7,
                 do_sample=True,
                 pad_token_id=self.tokenizer.pad_token_id,

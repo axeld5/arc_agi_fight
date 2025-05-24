@@ -223,11 +223,11 @@ class TestRL:
             num_generations=2,
             bf16=False,
             use_vllm=False,
-            max_steps=1000,  # Fewer steps for faster iteration
+            max_steps=50,  # Fewer steps for faster iteration
             max_completion_length=self.max_seq_length,
-            optim="paged_adamw_8bit",
-            logging_steps=50,
-            save_steps=100,
+            optim="adamw_torch",
+            logging_steps=10,
+            save_steps=50,
         )
         
         trainer = GRPOTrainer(

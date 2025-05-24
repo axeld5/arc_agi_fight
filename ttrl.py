@@ -26,7 +26,7 @@ from llm_call import LLMInterface
 #MODEL_NAME = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
 #MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 #MODEL_NAME = "HuggingFaceTB/SmolLM2-135M-Instruct"
-MODEL_NAME = "Qwen/Qwen3-4B"
+MODEL_NAME = "Qwen/Qwen3-1.7B"
 
 class TestRL:
     """Main Test Reinforcement Learning class"""

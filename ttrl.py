@@ -164,6 +164,7 @@ class TestRL:
     return input_grid'''
         
         print(f"✅ Got initial answer: {len(initial_answer)} characters")
+        print(initial_answer)
         
         rows = [{
             "question": prompt_text,

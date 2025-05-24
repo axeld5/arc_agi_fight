@@ -245,16 +245,16 @@ class TestRL:
         
         # Setup GRPO training with LoRA-friendly settings
         training_args = GRPOConfig(
-            per_device_train_batch_size=2,
+            per_device_train_batch_size=16,
             gradient_accumulation_steps=4,
             num_generations=8,
-            bf16=False,
+            bf16=True,
             use_vllm=False,
             max_steps=50 if not self.use_lora else 100,  # Fewer steps for LoRA as it trains faster
             max_completion_length=self.max_seq_length,
             optim="adamw_torch",
             learning_rate=5e-4 if not self.use_lora else 1e-4,  # Lower learning rate for LoRA
-            logging_steps=10,
+            logging_steps=5,
             save_steps=50,
         )
         
